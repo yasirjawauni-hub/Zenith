@@ -1,540 +1,1667 @@
 --[[
 
-	Zenith Interface Suite
-	by zurai02
+	╔═══════════════════════════════════════════════════════╗
+	║           Celestial Interface Suite v1.0.0            ║
+	║      Fluent · Glassmorphic · Premium · Modern         ║
+	╚═══════════════════════════════════════════════════════╝
 
-	Forked and modernized from Rayfield Interface Suite (Sirius)
-	Redesigned APIs · Cleaner internals · Enhanced security · Modern theming
+	by zurai02
+	Forked from Zenith (Rayfield lineage)
+	Redesigned with Fluent UI / WinUI 3 design language
 
 ]]
 
 ------------------------------------------------------------------------
--- Debug bootstrap
-------------------------------------------------------------------------
-if debugX then
-	warn("[Zenith] Initialising...")
-end
-
-------------------------------------------------------------------------
--- Service helper
-------------------------------------------------------------------------
-local function getService(name: string)
-	local svc = game:GetService(name)
-	return if cloneref then cloneref(svc) else svc
-end
-
 -- Services
-local UserInputService = getService("UserInputService")
-local TweenService     = getService("TweenService")
-local Players          = getService("Players")
-local CoreGui          = getService("CoreGui")
-local HttpService      = getService("HttpService")
-local RunService       = getService("RunService")
-
 ------------------------------------------------------------------------
--- Environment detection
-------------------------------------------------------------------------
-local IS_STUDIO: boolean = RunService:IsStudio()
-
-------------------------------------------------------------------------
--- Remote loader (with timeout + cancellation)
-------------------------------------------------------------------------
-
---- Fetches a Lua script from `url`, executes it, and returns its result.
---- Cancels and returns `nil` if the request takes longer than `timeout` seconds.
----@param url     string   Remote URL to fetch.
----@param timeout number?  Max wait time in seconds (default 5).
----@return any
-local function loadWithTimeout(url: string, timeout: number?): ...any
-	assert(type(url) == "string", "[Zenith] loadWithTimeout: expected string, got " .. type(url))
-
-	timeout = timeout or 5
-
-	local completed = false
-	local ok, result = false, nil
-
-	local requestThread = task.spawn(function()
-		local fetchOk, fetchResult = pcall(game.HttpGet, game, url)
-
-		if not fetchOk or #fetchResult == 0 then
-			ok, result = false, (fetchOk and "Empty response" or fetchResult)
-			completed  = true
-			return
-		end
-
-		local execOk, execResult = pcall(function()
-			return (loadstring(fetchResult) :: any)()
-		end)
-		ok, result = execOk, execResult
-		completed   = true
-	end)
-
-	local timeoutThread = task.delay(timeout, function()
-		if not completed then
-			warn(("[Zenith] Request timed out after %ds: %s"):format(timeout, url))
-			task.cancel(requestThread)
-			result    = "Request timed out"
-			completed = true
-		end
-	end)
-
-	while not completed do
-		task.wait()
-	end
-
-	if coroutine.status(timeoutThread) ~= "dead" then
-		task.cancel(timeoutThread)
-	end
-
-	if not ok then
-		warn(("[Zenith] Failed to load '%s': %s"):format(url, tostring(result)))
-	end
-
-	return if ok then result else nil
+local function getService(name)
+	local s = game:GetService(name)
+	return if cloneref then cloneref(s) else s
 end
 
+local UIS         = getService("UserInputService")
+local TweenService= getService("TweenService")
+local Players     = getService("Players")
+local CoreGui     = getService("CoreGui")
+local Http        = getService("HttpService")
+local Run         = getService("RunService")
+
+local IS_STUDIO   = Run:IsStudio()
+
 ------------------------------------------------------------------------
--- Global environment flags
+-- Helpers
 ------------------------------------------------------------------------
-local _getgenv        = rawget(_G, "getgenv")
-local requestsEnabled = true   -- inverted flag for clarity
-local customAssetId   = nil
-local secureMode      = false
+local function safecall(fn, ...)
+	if not fn then return end
+	local ok, r = pcall(fn, ...)
+	if not ok then warn("[Celestial] " .. tostring(r)) end
+	return ok and r or nil
+end
 
-if _getgenv then
-	local function readGenv(key)
-		local ok, val = pcall(function() return _getgenv()[key] end)
-		return if ok then val else nil
-	end
-
-	if readGenv("DISABLE_ZENITH_REQUESTS") or readGenv("DISABLE_RAYFIELD_REQUESTS") then
-		requestsEnabled = false
-	end
-
-	local assetId = readGenv("ZENITH_ASSET_ID") or readGenv("RAYFIELD_ASSET_ID")
-	if type(assetId) == "number" then
-		customAssetId = assetId
-	end
-
-	if readGenv("ZENITH_SECURE") or readGenv("RAYFIELD_SECURE") then
-		secureMode = true
+local function folder(path)
+	if isfolder and not safecall(isfolder, path) then
+		safecall(makefolder, path)
 	end
 end
 
--- Silence all output in secure mode
-if secureMode then
-	local _error  = error
-	local _assert = assert
-	warn   = function(...) end
-	print  = function(...) end
-	error  = function(_, level) _error("", level) end
-	assert = function(v, ...) return _assert(v) end
+local function tw(inst, info, goals)
+	return TweenService:Create(inst, info, goals)
 end
 
-------------------------------------------------------------------------
--- Safe call helper
-------------------------------------------------------------------------
+-- Shared tween presets
+local T_FAST   = TweenInfo.new(0.15, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local T_MED    = TweenInfo.new(0.25, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local T_SLOW   = TweenInfo.new(0.40, Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+local T_SPRING = TweenInfo.new(0.35, Enum.EasingStyle.Back,  Enum.EasingDirection.Out)
 
---- Calls `func(...)` in a protected context. Returns the result on
---- success, or `false` on failure (with a warning).
-local function callSafely(func, ...)
-	if not func then return end
-	local ok, res = pcall(func, ...)
-	if not ok then
-		warn("[Zenith] Protected call failed: " .. tostring(res))
-		return false
-	end
-	return res
+local function make(cls, props, parent)
+	local i = Instance.new(cls)
+	for k, v in props do (i :: any)[k] = v end
+	if parent then i.Parent = parent end
+	return i
 end
 
---- Ensures a folder exists, creating it if it doesn't.
-local function ensureFolder(path: string)
-	if isfolder and not callSafely(isfolder, path) then
-		callSafely(makefolder, path)
-	end
+local function corner(r, p) return make("UICorner", { CornerRadius = UDim.new(0, r) }, p) end
+local function pad(l, r, t, b, p)
+	return make("UIPadding", {
+		PaddingLeft   = UDim.new(0, l or 0),
+		PaddingRight  = UDim.new(0, r or 0),
+		PaddingTop    = UDim.new(0, t or 0),
+		PaddingBottom = UDim.new(0, b or 0),
+	}, p)
+end
+local function stroke(color, thick, trans, p)
+	return make("UIStroke", { Color = color, Thickness = thick or 1, Transparency = trans or 0 }, p)
+end
+local function listLayout(dir, sort, spacing, p)
+	return make("UIListLayout", {
+		FillDirection    = dir or Enum.FillDirection.Vertical,
+		SortOrder        = sort or Enum.SortOrder.LayoutOrder,
+		Padding          = UDim.new(0, spacing or 6),
+	}, p)
 end
 
 ------------------------------------------------------------------------
 -- Constants
 ------------------------------------------------------------------------
-local BUILD          = "1.0.0"
-local SUITE_NAME     = "Zenith"
-local FOLDER_ROOT    = "Zenith"
-local FOLDER_CONFIG  = FOLDER_ROOT .. "/Configurations"
-local CONFIG_EXT     = ".znth"
+local VERSION     = "1.0.0"
+local NAME        = "Celestial"
+local FOLDER_ROOT = "Celestial"
+local FOLDER_CFG  = FOLDER_ROOT .. "/Configs"
+local CFG_EXT     = ".cltl"
 
 ------------------------------------------------------------------------
--- Settings schema
+-- Glass palette — Fluent / Mica / Acrylic inspired
 ------------------------------------------------------------------------
-local settingsSchema = {
-	General = {
-		openKeybind = { Type = "bind",   Value = "K",    Name = "Open / Close Keybind" },
+-- Each theme: backdrop tint + surface layers + accent + text
+-- Alpha values here are used as BackgroundTransparency
+
+local Themes = {
+
+	-- ── Nebula (cool glass, violet accent) ─────────────────────────
+	Nebula = {
+		Accent            = Color3.fromRGB(128, 100, 255),
+		AccentHover       = Color3.fromRGB(150, 125, 255),
+		AccentText        = Color3.fromRGB(255, 255, 255),
+
+		WindowBg          = Color3.fromRGB(14, 12, 24),
+		WindowTrans       = 0.08,
+
+		Surface           = Color3.fromRGB(255, 255, 255),
+		SurfaceTrans      = 0.92,     -- very glassy
+
+		SurfaceDeep       = Color3.fromRGB(255, 255, 255),
+		SurfaceDeepTrans  = 0.88,
+
+		TopbarBg          = Color3.fromRGB(255, 255, 255),
+		TopbarTrans       = 0.88,
+
+		SidebarBg         = Color3.fromRGB(255, 255, 255),
+		SidebarTrans      = 0.90,
+
+		Divider           = Color3.fromRGB(255, 255, 255),
+		DividerTrans      = 0.82,
+
+		TextPrimary       = Color3.fromRGB(245, 245, 255),
+		TextSecondary     = Color3.fromRGB(200, 196, 225),
+		TextMuted         = Color3.fromRGB(150, 145, 180),
+
+		StrokeLight       = Color3.fromRGB(255, 255, 255),
+		StrokeLightTrans  = 0.80,
+		StrokeDark        = Color3.fromRGB(100, 90, 160),
+		StrokeDarkTrans   = 0.70,
+
+		Toggle            = Color3.fromRGB(128, 100, 255),
+		ToggleOff         = Color3.fromRGB(80, 75, 110),
+		SliderFill        = Color3.fromRGB(128, 100, 255),
+		SliderTrack       = Color3.fromRGB(60, 55, 100),
+
+		Ripple            = Color3.fromRGB(200, 190, 255),
+		Shadow            = Color3.fromRGB(5, 3, 18),
 	},
-	System = {
-		analytics   = { Type = "toggle", Value = true,   Name = "Anonymous Analytics"  },
+
+	-- ── Aurora (teal/mint glass) ────────────────────────────────────
+	Aurora = {
+		Accent            = Color3.fromRGB(32, 200, 165),
+		AccentHover       = Color3.fromRGB(50, 220, 185),
+		AccentText        = Color3.fromRGB(10, 30, 25),
+
+		WindowBg          = Color3.fromRGB(8, 20, 18),
+		WindowTrans       = 0.08,
+
+		Surface           = Color3.fromRGB(255, 255, 255),
+		SurfaceTrans      = 0.92,
+		SurfaceDeep       = Color3.fromRGB(255, 255, 255),
+		SurfaceDeepTrans  = 0.88,
+		TopbarBg          = Color3.fromRGB(255, 255, 255),
+		TopbarTrans       = 0.88,
+		SidebarBg         = Color3.fromRGB(255, 255, 255),
+		SidebarTrans      = 0.90,
+		Divider           = Color3.fromRGB(255, 255, 255),
+		DividerTrans      = 0.82,
+
+		TextPrimary       = Color3.fromRGB(220, 250, 240),
+		TextSecondary     = Color3.fromRGB(160, 210, 195),
+		TextMuted         = Color3.fromRGB(110, 160, 150),
+
+		StrokeLight       = Color3.fromRGB(255, 255, 255),
+		StrokeLightTrans  = 0.80,
+		StrokeDark        = Color3.fromRGB(30, 140, 115),
+		StrokeDarkTrans   = 0.65,
+
+		Toggle            = Color3.fromRGB(32, 200, 165),
+		ToggleOff         = Color3.fromRGB(50, 85, 78),
+		SliderFill        = Color3.fromRGB(32, 200, 165),
+		SliderTrack       = Color3.fromRGB(30, 70, 62),
+
+		Ripple            = Color3.fromRGB(180, 255, 235),
+		Shadow            = Color3.fromRGB(2, 10, 8),
+	},
+
+	-- ── Dusk (warm amber/rose glass) ───────────────────────────────
+	Dusk = {
+		Accent            = Color3.fromRGB(255, 130, 70),
+		AccentHover       = Color3.fromRGB(255, 150, 95),
+		AccentText        = Color3.fromRGB(30, 10, 0),
+
+		WindowBg          = Color3.fromRGB(22, 12, 6),
+		WindowTrans       = 0.08,
+
+		Surface           = Color3.fromRGB(255, 255, 255),
+		SurfaceTrans      = 0.92,
+		SurfaceDeep       = Color3.fromRGB(255, 255, 255),
+		SurfaceDeepTrans  = 0.88,
+		TopbarBg          = Color3.fromRGB(255, 255, 255),
+		TopbarTrans       = 0.88,
+		SidebarBg         = Color3.fromRGB(255, 255, 255),
+		SidebarTrans      = 0.90,
+		Divider           = Color3.fromRGB(255, 255, 255),
+		DividerTrans      = 0.82,
+
+		TextPrimary       = Color3.fromRGB(255, 238, 220),
+		TextSecondary     = Color3.fromRGB(215, 185, 155),
+		TextMuted         = Color3.fromRGB(165, 135, 110),
+
+		StrokeLight       = Color3.fromRGB(255, 255, 255),
+		StrokeLightTrans  = 0.80,
+		StrokeDark        = Color3.fromRGB(180, 90, 40),
+		StrokeDarkTrans   = 0.65,
+
+		Toggle            = Color3.fromRGB(255, 130, 70),
+		ToggleOff         = Color3.fromRGB(100, 60, 40),
+		SliderFill        = Color3.fromRGB(255, 130, 70),
+		SliderTrack       = Color3.fromRGB(80, 48, 30),
+
+		Ripple            = Color3.fromRGB(255, 210, 170),
+		Shadow            = Color3.fromRGB(12, 5, 2),
+	},
+
+	-- ── Void (OLED black, pure glassy) ─────────────────────────────
+	Void = {
+		Accent            = Color3.fromRGB(160, 110, 255),
+		AccentHover       = Color3.fromRGB(180, 135, 255),
+		AccentText        = Color3.fromRGB(255, 255, 255),
+
+		WindowBg          = Color3.fromRGB(4, 3, 8),
+		WindowTrans       = 0.05,
+
+		Surface           = Color3.fromRGB(255, 255, 255),
+		SurfaceTrans      = 0.94,
+		SurfaceDeep       = Color3.fromRGB(255, 255, 255),
+		SurfaceDeepTrans  = 0.91,
+		TopbarBg          = Color3.fromRGB(255, 255, 255),
+		TopbarTrans       = 0.91,
+		SidebarBg         = Color3.fromRGB(255, 255, 255),
+		SidebarTrans      = 0.92,
+		Divider           = Color3.fromRGB(255, 255, 255),
+		DividerTrans      = 0.88,
+
+		TextPrimary       = Color3.fromRGB(240, 235, 255),
+		TextSecondary     = Color3.fromRGB(185, 175, 215),
+		TextMuted         = Color3.fromRGB(130, 120, 160),
+
+		StrokeLight       = Color3.fromRGB(255, 255, 255),
+		StrokeLightTrans  = 0.85,
+		StrokeDark        = Color3.fromRGB(120, 80, 220),
+		StrokeDarkTrans   = 0.72,
+
+		Toggle            = Color3.fromRGB(160, 110, 255),
+		ToggleOff         = Color3.fromRGB(55, 45, 85),
+		SliderFill        = Color3.fromRGB(160, 110, 255),
+		SliderTrack       = Color3.fromRGB(35, 28, 60),
+
+		Ripple            = Color3.fromRGB(210, 190, 255),
+		Shadow            = Color3.fromRGB(2, 1, 6),
+	},
+
+	-- ── Frost (light glass, blue accent) ───────────────────────────
+	Frost = {
+		Accent            = Color3.fromRGB(10, 130, 230),
+		AccentHover       = Color3.fromRGB(30, 150, 250),
+		AccentText        = Color3.fromRGB(255, 255, 255),
+
+		WindowBg          = Color3.fromRGB(200, 215, 235),
+		WindowTrans       = 0.25,
+
+		Surface           = Color3.fromRGB(255, 255, 255),
+		SurfaceTrans      = 0.55,
+		SurfaceDeep       = Color3.fromRGB(255, 255, 255),
+		SurfaceDeepTrans  = 0.45,
+		TopbarBg          = Color3.fromRGB(255, 255, 255),
+		TopbarTrans       = 0.45,
+		SidebarBg         = Color3.fromRGB(255, 255, 255),
+		SidebarTrans      = 0.50,
+		Divider           = Color3.fromRGB(0, 0, 0),
+		DividerTrans      = 0.90,
+
+		TextPrimary       = Color3.fromRGB(15, 25, 50),
+		TextSecondary     = Color3.fromRGB(60, 80, 120),
+		TextMuted         = Color3.fromRGB(110, 130, 165),
+
+		StrokeLight       = Color3.fromRGB(255, 255, 255),
+		StrokeLightTrans  = 0.35,
+		StrokeDark        = Color3.fromRGB(10, 80, 180),
+		StrokeDarkTrans   = 0.70,
+
+		Toggle            = Color3.fromRGB(10, 130, 230),
+		ToggleOff         = Color3.fromRGB(150, 170, 200),
+		SliderFill        = Color3.fromRGB(10, 130, 230),
+		SliderTrack       = Color3.fromRGB(170, 190, 220),
+
+		Ripple            = Color3.fromRGB(180, 215, 255),
+		Shadow            = Color3.fromRGB(40, 60, 100),
 	},
 }
 
--- Overrides supplied by the developer (highest priority, not persisted)
-local overriddenSettings: { [string]: any } = {}
+------------------------------------------------------------------------
+-- Notification system
+------------------------------------------------------------------------
+local _notifScreen = nil
+local _notifHolder = nil
 
---- Override a setting programmatically. Overrides are not written to disk.
----@param category string  Top-level settings category (e.g. "General").
----@param key      string  Setting key (e.g. "openKeybind").
----@param value    any     New value.
-local function overrideSetting(category: string, key: string, value: any)
-	overriddenSettings[category .. "." .. key] = value
+local function ensureNotifLayer()
+	if _notifHolder and _notifHolder.Parent then return end
+
+	_notifScreen = make("ScreenGui", {
+		Name           = "CelestialNotifs",
+		ResetOnSpawn   = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	})
+	pcall(function() _notifScreen.Parent = CoreGui end)
+
+	_notifHolder = make("Frame", {
+		Name                  = "Holder",
+		Size                  = UDim2.new(0, 300, 1, -20),
+		Position              = UDim2.new(1, -316, 0, 10),
+		BackgroundTransparency = 1,
+	}, _notifScreen)
+
+	make("UIListLayout", {
+		VerticalAlignment = Enum.VerticalAlignment.Bottom,
+		FillDirection     = Enum.FillDirection.Vertical,
+		SortOrder         = Enum.SortOrder.LayoutOrder,
+		Padding           = UDim.new(0, 8),
+	}, _notifHolder)
 end
 
---- Read a setting, respecting override priority.
----@param category string
----@param key      string
----@return any
-local function getSetting(category: string, key: string): any
-	local override = overriddenSettings[category .. "." .. key]
-	if override ~= nil then return override end
+------------------------------------------------------------------------
+-- Celestial Library
+------------------------------------------------------------------------
+local Celestial       = {}
+Celestial.__index     = Celestial
+Celestial.Themes      = Themes
+Celestial.ActiveTheme = Themes.Nebula
+Celestial.Windows     = {}
+Celestial.Flags       = {}   -- global element registry
 
-	local cat = settingsSchema[category]
-	if cat and cat[key] then
-		return cat[key].Value
+------------------------------------------------------------------------
+-- Notify
+------------------------------------------------------------------------
+function Celestial:Notify(opts: {
+	Title:    string,
+	Content:  string?,
+	Duration: number?,
+	Theme:    string?,
+	Type:     string?,   -- "info" | "success" | "warn" | "error"
+})
+	ensureNotifLayer()
+
+	local t        = Themes[opts.Theme or ""] or self.ActiveTheme
+	local duration = opts.Duration or 4
+	local notifType= opts.Type or "info"
+
+	local accentMap = {
+		info    = t.Accent,
+		success = Color3.fromRGB(50, 210, 120),
+		warn    = Color3.fromRGB(255, 185, 40),
+		error   = Color3.fromRGB(255, 70, 70),
+	}
+	local accent = accentMap[notifType] or t.Accent
+
+	-- Card shell (glass)
+	local card = make("Frame", {
+		Name                  = "Notif",
+		Size                  = UDim2.new(1, 0, 0, 68),
+		BackgroundColor3      = t.Surface,
+		BackgroundTransparency= t.SurfaceTrans,
+		ClipsDescendants      = false,
+	}, _notifHolder)
+	corner(12, card)
+	stroke(t.StrokeLight, 1, t.StrokeLightTrans, card)
+
+	-- Accent pill (left edge)
+	local pill = make("Frame", {
+		Size             = UDim2.new(0, 3, 0.7, 0),
+		Position         = UDim2.new(0, 8, 0.15, 0),
+		BackgroundColor3 = accent,
+	}, card)
+	corner(4, pill)
+
+	-- Icon
+	local iconMap = { info = "ℹ", success = "✓", warn = "⚠", error = "✕" }
+	make("TextLabel", {
+		Position              = UDim2.new(0, 20, 0.5, -10),
+		Size                  = UDim2.new(0, 20, 0, 20),
+		BackgroundTransparency= 1,
+		Text                  = iconMap[notifType] or "ℹ",
+		TextColor3            = accent,
+		Font                  = Enum.Font.GothamBold,
+		TextSize              = 14,
+	}, card)
+
+	-- Title
+	make("TextLabel", {
+		Position              = UDim2.new(0, 46, 0, 10),
+		Size                  = UDim2.new(1, -54, 0, 20),
+		BackgroundTransparency= 1,
+		Text                  = opts.Title or "",
+		TextColor3            = t.TextPrimary,
+		Font                  = Enum.Font.GothamBold,
+		TextSize              = 13,
+		TextXAlignment        = Enum.TextXAlignment.Left,
+	}, card)
+
+	-- Body
+	if opts.Content and #opts.Content > 0 then
+		make("TextLabel", {
+			Position              = UDim2.new(0, 46, 0, 32),
+			Size                  = UDim2.new(1, -54, 0, 28),
+			BackgroundTransparency= 1,
+			Text                  = opts.Content,
+			TextColor3            = t.TextSecondary,
+			Font                  = Enum.Font.Gotham,
+			TextSize              = 11,
+			TextXAlignment        = Enum.TextXAlignment.Left,
+			TextWrapped           = true,
+		}, card)
 	end
-end
 
--- Propagate request-disabled flag to analytics setting
-if not requestsEnabled then
-	overrideSetting("System", "analytics", false)
+	-- Progress bar
+	local bar = make("Frame", {
+		Position         = UDim2.new(0, 0, 1, -2),
+		Size             = UDim2.new(1, 0, 0, 2),
+		BackgroundColor3 = accent,
+		BackgroundTransparency = 0.4,
+	}, card)
+	corner(2, bar)
+
+	-- Animate in from right
+	card.Position = UDim2.new(1, 16, 0, 0)
+	tw(card, T_SPRING, { Position = UDim2.new(0, 0, 0, 0) }):Play()
+
+	-- Drain bar
+	tw(bar, TweenInfo.new(duration, Enum.EasingStyle.Linear), {
+		Size = UDim2.new(0, 0, 0, 2),
+	}):Play()
+
+	task.delay(duration, function()
+		tw(card, T_MED, {
+			Position              = UDim2.new(1, 16, 0, 0),
+			BackgroundTransparency = 1,
+		}):Play()
+		task.wait(0.3)
+		card:Destroy()
+	end)
 end
 
 ------------------------------------------------------------------------
--- Settings persistence
+-- CreateWindow
 ------------------------------------------------------------------------
-local settingsCreated     = false
-local settingsInitialised = false
+function Celestial:CreateWindow(opts: {
+	Name:    string,
+	Theme:   string?,
+	Icon:    number?,
+	Keybind: Enum.KeyCode?,
+	Size:    Vector2?,
+	ConfigurationSaving: { Enabled: boolean, FileName: string? }?,
+}): table
 
-local function loadSettings()
-	local raw = nil
+	local t = Themes[opts.Theme or ""] or self.ActiveTheme
+	self.ActiveTheme = t
 
-	local ok, err = pcall(function()
-		if callSafely(isfolder, FOLDER_ROOT) then
-			local path = FOLDER_ROOT .. "/settings" .. CONFIG_EXT
-			if callSafely(isfile, path) then
-				raw = callSafely(readfile, path)
-			end
-		end
+	folder(FOLDER_ROOT)
+	folder(FOLDER_CFG)
 
-		-- Studio override for fast iteration
-		if IS_STUDIO then
-			raw = [[{"General":{"openKeybind":{"Value":"K","Type":"bind","Name":"Open / Close Keybind"}},"System":{"analytics":{"Value":false,"Type":"toggle","Name":"Anonymous Analytics"}}}]]
-		end
+	local W = opts.Size and opts.Size.X or 580
+	local H = opts.Size and opts.Size.Y or 400
 
-		local parsed = {}
-		if raw then
-			local decOk, decoded = pcall(function()
-				return HttpService:JSONDecode(raw)
-			end)
-			parsed = if decOk then decoded else {}
-		end
+	------------------------------------------------------------------------
+	-- Root screen
+	------------------------------------------------------------------------
+	local screen = make("ScreenGui", {
+		Name           = opts.Name or NAME,
+		ResetOnSpawn   = false,
+		IgnoreGuiInset = true,
+		ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+	})
+	pcall(function() screen.Parent = CoreGui end)
 
-		if not settingsCreated then return end
+	------------------------------------------------------------------------
+	-- Window frame (glass card)
+	------------------------------------------------------------------------
+	local win = make("Frame", {
+		Name                  = "Window",
+		Size                  = UDim2.new(0, W, 0, H),
+		Position              = UDim2.new(0.5, -W/2, 0.5, -H/2),
+		BackgroundColor3      = t.WindowBg,
+		BackgroundTransparency= t.WindowTrans,
+		ClipsDescendants      = true,
+	}, screen)
+	corner(16, win)
+	stroke(t.StrokeLight, 1, t.StrokeLightTrans, win)
 
-		if next(parsed) then
-			for catName, category in pairs(settingsSchema) do
-				if parsed[catName] then
-					for keyName, setting in pairs(category) do
-						if parsed[catName][keyName] then
-							setting.Value = parsed[catName][keyName].Value
-							setting.Element:Set(getSetting(catName, keyName))
-						end
-					end
-				end
-			end
-		else
-			-- Apply only developer overrides when no saved settings exist
-			for compound, value in overriddenSettings do
-				local parts = string.split(compound, ".")
-				assert(#parts == 2, "[Zenith] Malformed override key: " .. compound)
-				local cat, key = parts[1], parts[2]
-				if settingsSchema[cat] and settingsSchema[cat][key] then
-					settingsSchema[cat][key].Element:Set(value)
-				end
-			end
-		end
+	-- Subtle inner glow (top edge highlight, Fluent-style)
+	local topGlow = make("Frame", {
+		Size             = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = t.StrokeLight,
+		BackgroundTransparency = 0.55,
+		ZIndex           = 10,
+	}, win)
 
-		settingsInitialised = true
+	-- Shadow image
+	make("ImageLabel", {
+		Name                  = "Shadow",
+		Size                  = UDim2.new(1, 60, 1, 60),
+		Position              = UDim2.new(0, -30, 0, -30),
+		BackgroundTransparency= 1,
+		Image                 = "rbxassetid://6014261993",
+		ImageColor3           = t.Shadow,
+		ImageTransparency     = 0.35,
+		ScaleType             = Enum.ScaleType.Slice,
+		SliceCenter           = Rect.new(49, 49, 450, 450),
+		ZIndex                = -1,
+	}, win)
+
+	------------------------------------------------------------------------
+	-- Topbar
+	------------------------------------------------------------------------
+	local topbar = make("Frame", {
+		Name                  = "Topbar",
+		Size                  = UDim2.new(1, 0, 0, 46),
+		BackgroundColor3      = t.TopbarBg,
+		BackgroundTransparency= t.TopbarTrans,
+		ZIndex                = 5,
+	}, win)
+	-- bottom separator
+	make("Frame", {
+		Position         = UDim2.new(0, 0, 1, -1),
+		Size             = UDim2.new(1, 0, 0, 1),
+		BackgroundColor3 = t.Divider,
+		BackgroundTransparency = t.DividerTrans,
+	}, topbar)
+
+	-- Title
+	make("TextLabel", {
+		Position              = UDim2.new(0, 16, 0, 0),
+		Size                  = UDim2.new(0.6, 0, 1, 0),
+		BackgroundTransparency= 1,
+		Text                  = opts.Name or NAME,
+		TextColor3            = t.TextPrimary,
+		Font                  = Enum.Font.GothamBold,
+		TextSize              = 14,
+		TextXAlignment        = Enum.TextXAlignment.Left,
+		ZIndex                = 6,
+	}, topbar)
+
+	-- Version badge
+	local badge = make("Frame", {
+		Size                  = UDim2.new(0, 52, 0, 20),
+		Position              = UDim2.new(0, 16 + 8, 0.5, -10),
+		BackgroundColor3      = t.Accent,
+		BackgroundTransparency= 0.75,
+		ZIndex                = 6,
+	}, topbar)
+	corner(6, badge)
+	make("TextLabel", {
+		Size                  = UDim2.new(1, 0, 1, 0),
+		BackgroundTransparency= 1,
+		Text                  = "v" .. VERSION,
+		TextColor3            = t.Accent,
+		Font                  = Enum.Font.GothamBold,
+		TextSize              = 10,
+		ZIndex                = 7,
+	}, badge)
+	badge.Position = UDim2.new(0, 16 + (string.len(opts.Name or NAME) * 8.5) + 12, 0.5, -10)
+
+	-- Window controls (close / minimise)
+	local function makeCtrl(color, xPos, onClick)
+		local btn = make("TextButton", {
+			Size             = UDim2.new(0, 14, 0, 14),
+			Position         = UDim2.new(1, xPos, 0.5, -7),
+			BackgroundColor3 = color,
+			Text             = "",
+			AutoButtonColor  = false,
+			ZIndex           = 6,
+		}, topbar)
+		corner(7, btn)
+		btn.MouseButton1Click:Connect(onClick)
+		btn.MouseEnter:Connect(function()
+			tw(btn, T_FAST, { BackgroundTransparency = 0.2 }):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			tw(btn, T_FAST, { BackgroundTransparency = 0 }):Play()
+		end)
+		return btn
+	end
+
+	local minimised = false
+	makeCtrl(Color3.fromRGB(255, 90, 80), -28, function()
+		tw(win, T_MED, {
+			Size     = UDim2.new(0, 0, 0, 0),
+			Position = UDim2.new(0.5, 0, 0.5, 0),
+			BackgroundTransparency = 1,
+		}):Play()
+		task.wait(0.28)
+		screen:Destroy()
 	end)
 
-	if not ok then
-		if writefile then
-			warn("[Zenith] Could not access settings storage: " .. tostring(err))
+	makeCtrl(Color3.fromRGB(255, 190, 50), -50, function()
+		minimised = not minimised
+		tw(win, T_MED, {
+			Size = if minimised
+				then UDim2.new(0, W, 0, 46)
+				else UDim2.new(0, W, 0, H),
+		}):Play()
+	end)
+
+	------------------------------------------------------------------------
+	-- Dragging
+	------------------------------------------------------------------------
+	do
+		local drag, startMouse, startPos = false, nil, nil
+		topbar.InputBegan:Connect(function(i)
+			if i.UserInputType == Enum.UserInputType.MouseButton1 then
+				drag = true
+				startMouse = i.Position
+				startPos   = win.Position
+			end
+		end)
+		topbar.InputEnded:Connect(function(i)
+			if i.UserInputType == Enum.UserInputType.MouseButton1 then drag = false end
+		end)
+		UIS.InputChanged:Connect(function(i)
+			if drag and i.UserInputType == Enum.UserInputType.MouseMovement then
+				local d = i.Position - startMouse
+				win.Position = UDim2.new(
+					startPos.X.Scale, startPos.X.Offset + d.X,
+					startPos.Y.Scale, startPos.Y.Offset + d.Y
+				)
+			end
+		end)
+	end
+
+	------------------------------------------------------------------------
+	-- Layout: sidebar + content
+	------------------------------------------------------------------------
+	local sidebar = make("Frame", {
+		Name                  = "Sidebar",
+		Position              = UDim2.new(0, 0, 0, 46),
+		Size                  = UDim2.new(0, 155, 1, -46),
+		BackgroundColor3      = t.SidebarBg,
+		BackgroundTransparency= t.SidebarTrans,
+		ClipsDescendants      = true,
+		ZIndex                = 4,
+	}, win)
+
+	-- sidebar right separator
+	make("Frame", {
+		Position              = UDim2.new(1, -1, 0, 0),
+		Size                  = UDim2.new(0, 1, 1, 0),
+		BackgroundColor3      = t.Divider,
+		BackgroundTransparency= t.DividerTrans,
+	}, sidebar)
+
+	listLayout(Enum.FillDirection.Vertical, Enum.SortOrder.LayoutOrder, 4, sidebar)
+	pad(8, 8, 10, 10, sidebar)
+
+	local content = make("Frame", {
+		Name                  = "Content",
+		Position              = UDim2.new(0, 156, 0, 46),
+		Size                  = UDim2.new(1, -156, 1, -46),
+		BackgroundTransparency= 1,
+		ClipsDescendants      = true,
+	}, win)
+
+	------------------------------------------------------------------------
+	-- Keybind toggle
+	------------------------------------------------------------------------
+	local kb = opts.Keybind or Enum.KeyCode.LeftAlt
+	UIS.InputBegan:Connect(function(i, gpe)
+		if gpe then return end
+		if i.KeyCode == kb then
+			win.Visible = not win.Visible
+		end
+	end)
+
+	------------------------------------------------------------------------
+	-- Open animation
+	------------------------------------------------------------------------
+	win.Size     = UDim2.new(0, 0, 0, 0)
+	win.Position = UDim2.new(0.5, 0, 0.5, 0)
+	win.BackgroundTransparency = 1
+	task.wait()
+	tw(win, T_SPRING, {
+		Size                  = UDim2.new(0, W, 0, H),
+		Position              = UDim2.new(0.5, -W/2, 0.5, -H/2),
+		BackgroundTransparency= t.WindowTrans,
+	}):Play()
+
+	------------------------------------------------------------------------
+	-- Window object
+	------------------------------------------------------------------------
+	local Window = {}
+	Window._theme      = t
+	Window._sidebar    = sidebar
+	Window._content    = content
+	Window._tabs       = {}
+	Window._tabBtns    = {}
+	Window._tabFrames  = {}
+	Window._activeTab  = nil
+
+	------------------------------------------------------------------------
+	-- Config persistence
+	------------------------------------------------------------------------
+	local cfgOpts = opts.ConfigurationSaving
+	if cfgOpts and cfgOpts.Enabled then
+		local cfgFile = FOLDER_CFG .. "/" .. (cfgOpts.FileName or opts.Name or "config") .. CFG_EXT
+
+		function Window:SaveConfig(data)
+			local ok, enc = pcall(function() return Http:JSONEncode(data) end)
+			if ok then safecall(writefile, cfgFile, enc) end
+		end
+
+		function Window:LoadConfig()
+			if safecall(isfile, cfgFile) then
+				local raw = safecall(readfile, cfgFile)
+				if raw then
+					local ok, dec = pcall(function() return Http:JSONDecode(raw) end)
+					if ok then return dec end
+				end
+			end
 		end
 	end
-end
 
-if debugX then warn("[Zenith] Loading settings...") end
-loadSettings()
-if debugX then warn("[Zenith] Settings loaded.") end
+	------------------------------------------------------------------------
+	-- CreateTab
+	------------------------------------------------------------------------
+	function Window:CreateTab(tabOpts: { Name: string, Icon: string? }): table
+		local tabName = tabOpts.Name or "Tab"
+		local theme   = self._theme
 
-------------------------------------------------------------------------
--- Analytics (optional, anonymous)
-------------------------------------------------------------------------
-local ANALYTICS_ENDPOINT = "https://zenith-collect.zurai02.workers.dev"
-local ANALYTICS_TOKEN    = "" -- Set your own token here
+		--------------------------------------------------------------------
+		-- Sidebar button (Fluent-style pill)
+		--------------------------------------------------------------------
+		local btn = make("TextButton", {
+			Name                  = tabName,
+			Size                  = UDim2.new(1, 0, 0, 34),
+			BackgroundColor3      = theme.Surface,
+			BackgroundTransparency= 1,     -- start unselected / transparent
+			Text                  = "",
+			AutoButtonColor       = false,
+			ZIndex                = 5,
+		}, self._sidebar)
+		corner(8, btn)
 
-local reporter = nil
+		local btnLabel = make("TextLabel", {
+			Position              = UDim2.new(0, 10, 0, 0),
+			Size                  = UDim2.new(1, -10, 1, 0),
+			BackgroundTransparency= 1,
+			Text                  = tabName,
+			TextColor3            = theme.TextMuted,
+			Font                  = Enum.Font.Gotham,
+			TextSize              = 13,
+			TextXAlignment        = Enum.TextXAlignment.Left,
+			ZIndex                = 6,
+		}, btn)
 
-if requestsEnabled and not IS_STUDIO and ANALYTICS_TOKEN ~= "" then
-	local fetchOk, fetchResult = pcall(game.HttpGet, game,
-		"https://raw.githubusercontent.com/zurai02/Zenith/main/reporter.lua")
+		-- Active accent bar (left pill)
+		local accentBar = make("Frame", {
+			Size             = UDim2.new(0, 3, 0.55, 0),
+			Position         = UDim2.new(0, 0, 0.225, 0),
+			BackgroundColor3 = theme.Accent,
+			BackgroundTransparency = 1,  -- hidden until selected
+		}, btn)
+		corner(4, accentBar)
 
-	if fetchOk and #fetchResult > 0 then
-		local execOk, Analytics = pcall(function()
-			return (loadstring(fetchResult) :: any)()
+		--------------------------------------------------------------------
+		-- Content scroll frame
+		--------------------------------------------------------------------
+		local frame = make("ScrollingFrame", {
+			Name                  = tabName .. "_Frame",
+			Size                  = UDim2.new(1, 0, 1, 0),
+			BackgroundTransparency= 1,
+			ScrollBarThickness    = 3,
+			ScrollBarImageColor3  = theme.Accent,
+			ScrollBarImageTransparency = 0.5,
+			CanvasSize            = UDim2.new(0, 0, 0, 0),
+			AutomaticCanvasSize   = Enum.AutomaticSize.Y,
+			Visible               = false,
+		}, self._content)
+
+		listLayout(Enum.FillDirection.Vertical, Enum.SortOrder.LayoutOrder, 6, frame)
+		pad(14, 14, 12, 14, frame)
+
+		table.insert(self._tabBtns, btn)
+		table.insert(self._tabFrames, frame)
+
+		--------------------------------------------------------------------
+		-- Activate
+		--------------------------------------------------------------------
+		local function activate()
+			for _, b in self._tabBtns do
+				local bar_ = b:FindFirstChild("Frame")
+				tw(b, T_FAST, { BackgroundTransparency = 1 }):Play()
+				if bar_ then tw(bar_, T_FAST, { BackgroundTransparency = 1 }):Play() end
+				local lbl = b:FindFirstChildWhichIsA("TextLabel")
+				if lbl then tw(lbl, T_FAST, { TextColor3 = theme.TextMuted, Font = Enum.Font.Gotham }):Play() end
+			end
+			for _, f in self._tabFrames do f.Visible = false end
+
+			tw(btn, T_FAST, { BackgroundTransparency = theme.SurfaceDeepTrans }):Play()
+			tw(accentBar, T_FAST, { BackgroundTransparency = 0 }):Play()
+			tw(btnLabel, T_FAST, { TextColor3 = theme.TextPrimary }):Play()
+			btnLabel.Font = Enum.Font.GothamBold
+			frame.Visible = true
+			self._activeTab = frame
+		end
+
+		btn.MouseButton1Click:Connect(activate)
+		btn.MouseEnter:Connect(function()
+			if frame.Visible then return end
+			tw(btn, T_FAST, { BackgroundTransparency = theme.SurfaceTrans }):Play()
+		end)
+		btn.MouseLeave:Connect(function()
+			if frame.Visible then return end
+			tw(btn, T_FAST, { BackgroundTransparency = 1 }):Play()
 		end)
 
-		if execOk and Analytics then
-			pcall(function()
-				reporter = Analytics.new({
-					url          = ANALYTICS_ENDPOINT,
-					token        = ANALYTICS_TOKEN,
-					product_name = SUITE_NAME,
-					category     = "UILibrary",
-				})
+		if #self._tabFrames == 1 then activate() end
+
+		--------------------------------------------------------------------
+		-- Tab element API
+		--------------------------------------------------------------------
+		local Tab = {}
+
+		-- Helper: glass element row
+		local function glassRow(height, parent)
+			local row = make("Frame", {
+				Size                  = UDim2.new(1, 0, 0, height or 48),
+				BackgroundColor3      = theme.Surface,
+				BackgroundTransparency= theme.SurfaceDeepTrans,
+				ClipsDescendants      = false,
+			}, parent or frame)
+			corner(10, row)
+			stroke(theme.StrokeLight, 1, theme.StrokeLightTrans, row)
+			return row
+		end
+
+		-- Ripple effect on click
+		local function ripple(parent, x, y)
+			local r = make("Frame", {
+				Size             = UDim2.new(0, 0, 0, 0),
+				Position         = UDim2.new(0, x, 0, y),
+				AnchorPoint      = Vector2.new(0.5, 0.5),
+				BackgroundColor3 = theme.Ripple,
+				BackgroundTransparency = 0.7,
+				ZIndex           = 20,
+			}, parent)
+			corner(999, r)
+			tw(r, TweenInfo.new(0.4, Enum.EasingStyle.Quint), {
+				Size = UDim2.new(0, 120, 0, 120),
+				BackgroundTransparency = 1,
+			}):Play()
+			task.delay(0.4, function() r:Destroy() end)
+		end
+
+		--------------------------------------------------------------------
+		-- Section
+		--------------------------------------------------------------------
+		function Tab:CreateSection(text: string)
+			-- spacer + label
+			make("TextLabel", {
+				Size                  = UDim2.new(1, 0, 0, 18),
+				BackgroundTransparency= 1,
+				Text                  = text,
+				TextColor3            = theme.TextMuted,
+				Font                  = Enum.Font.GothamBold,
+				TextSize              = 10,
+				TextXAlignment        = Enum.TextXAlignment.Left,
+			}, frame)
+		end
+
+		--------------------------------------------------------------------
+		-- Button
+		--------------------------------------------------------------------
+		function Tab:CreateButton(o: { Name: string, Description: string?, Callback: () -> () })
+			local row = glassRow(48)
+			row.ClipsDescendants = true
+
+			make("TextLabel", {
+				Position              = UDim2.new(0, 14, 0, 0),
+				Size                  = UDim2.new(1, -100, 1, 0),
+				BackgroundTransparency= 1,
+				Text                  = o.Name,
+				TextColor3            = theme.TextPrimary,
+				Font                  = Enum.Font.Gotham,
+				TextSize              = 13,
+				TextXAlignment        = Enum.TextXAlignment.Left,
+			}, row)
+
+			if o.Description then
+				make("TextLabel", {
+					Position              = UDim2.new(0, 14, 0, 28),
+					Size                  = UDim2.new(1, -100, 0, 16),
+					BackgroundTransparency= 1,
+					Text                  = o.Description,
+					TextColor3            = theme.TextMuted,
+					Font                  = Enum.Font.Gotham,
+					TextSize              = 10,
+					TextXAlignment        = Enum.TextXAlignment.Left,
+				}, row)
+				row.Size = UDim2.new(1, 0, 0, 60)
+			end
+
+			-- Fluent-style filled button
+			local cBtn = make("TextButton", {
+				Size                  = UDim2.new(0, 72, 0, 28),
+				Position              = UDim2.new(1, -82, 0.5, -14),
+				BackgroundColor3      = theme.Accent,
+				BackgroundTransparency= 0.1,
+				Text                  = "Run",
+				TextColor3            = theme.AccentText,
+				Font                  = Enum.Font.GothamBold,
+				TextSize              = 12,
+				AutoButtonColor       = false,
+				ZIndex                = 5,
+			}, row)
+			corner(7, cBtn)
+
+			cBtn.MouseButton1Click:Connect(function(x, y)
+				tw(cBtn, T_FAST, { BackgroundTransparency = 0.4 }):Play()
+				ripple(row, cBtn.AbsolutePosition.X - row.AbsolutePosition.X + 36, 24)
+				task.delay(0.12, function()
+					tw(cBtn, T_FAST, { BackgroundTransparency = 0.1 }):Play()
+				end)
+				safecall(o.Callback)
+			end)
+
+			row.MouseEnter:Connect(function()
+				tw(row, T_FAST, { BackgroundTransparency = theme.SurfaceTrans }):Play()
+			end)
+			row.MouseLeave:Connect(function()
+				tw(row, T_FAST, { BackgroundTransparency = theme.SurfaceDeepTrans }):Play()
 			end)
 		end
-	end
-end
 
-------------------------------------------------------------------------
--- Request function (executor-agnostic)
-------------------------------------------------------------------------
-local requestFunc =
-	(syn          and syn.request)          or
-	(fluxus       and fluxus.request)       or
-	(http         and http.request)         or
-	http_request                            or
-	request
+		--------------------------------------------------------------------
+		-- Toggle  (Fluent-style pill switch)
+		--------------------------------------------------------------------
+		function Tab:CreateToggle(o: {
+			Name:     string,
+			Default:  boolean?,
+			Flag:     string?,
+			Callback: (boolean) -> (),
+		}): { Set: (boolean) -> () }
+			local state = o.Default or false
+			local row   = glassRow(48)
 
-------------------------------------------------------------------------
--- Prompt / consent module
-------------------------------------------------------------------------
-local prompt = IS_STUDIO
-	and require(script.Parent.prompt)
-	or  loadWithTimeout("https://raw.githubusercontent.com/zurai02/Zenith/main/prompt.lua")
+			make("TextLabel", {
+				Position              = UDim2.new(0, 14, 0, 0),
+				Size                  = UDim2.new(1, -80, 1, 0),
+				BackgroundTransparency= 1,
+				Text                  = o.Name,
+				TextColor3            = theme.TextPrimary,
+				Font                  = Enum.Font.Gotham,
+				TextSize              = 13,
+				TextXAlignment        = Enum.TextXAlignment.Left,
+			}, row)
 
-if not prompt then
-	warn("[Zenith] Prompt module unavailable — using no-op fallback.")
-	prompt = { create = function() end }
-end
+			-- Track
+			local track = make("Frame", {
+				Size                  = UDim2.new(0, 44, 0, 24),
+				Position              = UDim2.new(1, -56, 0.5, -12),
+				BackgroundColor3      = if state then theme.Toggle else theme.ToggleOff,
+				BackgroundTransparency= 0.1,
+			}, row)
+			corner(12, track)
+			stroke(theme.StrokeLight, 1, theme.StrokeLightTrans, track)
 
-------------------------------------------------------------------------
--- Secure notification helper
-------------------------------------------------------------------------
-local _secureWarningsShown: { [string]: boolean } = {}
+			-- Knob (with shadow to look elevated)
+			local knob = make("Frame", {
+				Size             = UDim2.new(0, 18, 0, 18),
+				Position         = if state
+					then UDim2.new(1, -21, 0.5, -9)
+					else UDim2.new(0, 3, 0.5, -9),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+			}, track)
+			corner(9, knob)
 
-local function secureNotify(tag: string, title: string, body: string)
-	if _secureWarningsShown[tag] then return end
-	_secureWarningsShown[tag] = true
+			local clickArea = make("TextButton", {
+				Size             = UDim2.new(1, 0, 1, 0),
+				BackgroundTransparency = 1,
+				Text             = "",
+			}, row)
 
-	task.spawn(function()
-		while not (ZenithLibrary and ZenithLibrary.Notify) do
-			task.wait(0.5)
+			local function setState(val: boolean)
+				state = val
+				tw(track, T_MED, {
+					BackgroundColor3 = if val then theme.Toggle else theme.ToggleOff,
+				}):Play()
+				tw(knob, T_MED, {
+					Position = if val
+						then UDim2.new(1, -21, 0.5, -9)
+						else UDim2.new(0, 3, 0.5, -9),
+					Size     = UDim2.new(0, 18, 0, 18),
+				}):Play()
+				safecall(o.Callback, val)
+				if o.Flag then Celestial.Flags[o.Flag] = val end
+			end
+
+			-- Press animation: knob squishes while held
+			clickArea.MouseButton1Down:Connect(function()
+				tw(knob, T_FAST, {
+					Size = if state then UDim2.new(0, 22, 0, 18) else UDim2.new(0, 22, 0, 18),
+				}):Play()
+			end)
+			clickArea.MouseButton1Up:Connect(function()
+				setState(not state)
+			end)
+
+			if o.Flag then Celestial.Flags[o.Flag] = state end
+			return { Set = setState }
 		end
-		ZenithLibrary:Notify({ Title = title, Content = body, Duration = 8 })
-	end)
+
+		--------------------------------------------------------------------
+		-- Slider  (Fluent-style with value bubble)
+		--------------------------------------------------------------------
+		function Tab:CreateSlider(o: {
+			Name:     string,
+			Min:      number,
+			Max:      number,
+			Default:  number?,
+			Step:     number?,
+			Suffix:   string?,
+			Flag:     string?,
+			Callback: (number) -> (),
+		}): { Set: (number) -> () }
+			local mn, mx  = o.Min, o.Max
+			local step    = o.Step or 1
+			local value   = math.clamp(o.Default or mn, mn, mx)
+			local row     = glassRow(62)
+
+			make("TextLabel", {
+				Position              = UDim2.new(0, 14, 0, 8),
+				Size                  = UDim2.new(1, -80, 0, 18),
+				BackgroundTransparency= 1,
+				Text                  = o.Name,
+				TextColor3            = theme.TextPrimary,
+				Font                  = Enum.Font.Gotham,
+				TextSize              = 13,
+				TextXAlignment        = Enum.TextXAlignment.Left,
+			}, row)
+
+			local valLabel = make("TextLabel", {
+				Position              = UDim2.new(1, -68, 0, 8),
+				Size                  = UDim2.new(0, 60, 0, 18),
+				BackgroundTransparency= 1,
+				Text                  = tostring(value) .. (o.Suffix or ""),
+				TextColor3            = theme.Accent,
+				Font                  = Enum.Font.GothamBold,
+				TextSize              = 12,
+				TextXAlignment        = Enum.TextXAlignment.Right,
+			}, row)
+
+			-- Track bg
+			local trackBg = make("Frame", {
+				Position         = UDim2.new(0, 14, 0, 38),
+				Size             = UDim2.new(1, -28, 0, 4),
+				BackgroundColor3 = theme.SliderTrack,
+				BackgroundTransparency = 0.4,
+			}, row)
+			corner(4, trackBg)
+
+			-- Fill
+			local fill = make("Frame", {
+				Size             = UDim2.new((value - mn)/(mx - mn), 0, 1, 0),
+				BackgroundColor3 = theme.SliderFill,
+			}, trackBg)
+			corner(4, fill)
+
+			-- Thumb
+			local thumb = make("Frame", {
+				Size             = UDim2.new(0, 14, 0, 14),
+				Position         = UDim2.new((value - mn)/(mx - mn), -7, 0.5, -7),
+				BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+				ZIndex           = 5,
+			}, trackBg)
+			corner(7, thumb)
+			stroke(theme.Accent, 2, 0.2, thumb)
+
+			local dragging = false
+
+			local function snapTo(v)
+				v = math.clamp(
+					math.round((v - mn) / step) * step + mn,
+					mn, mx
+				)
+				value = v
+				local pct = (v - mn) / (mx - mn)
+				tw(fill,  T_FAST, { Size     = UDim2.new(pct, 0, 1, 0) }):Play()
+				tw(thumb, T_FAST, { Position = UDim2.new(pct, -7, 0.5, -7) }):Play()
+				valLabel.Text = tostring(v) .. (o.Suffix or "")
+				safecall(o.Callback, v)
+				if o.Flag then Celestial.Flags[o.Flag] = v end
+			end
+
+			local function onMouse(input)
+				local rel = math.clamp(
+					(input.Position.X - trackBg.AbsolutePosition.X) / trackBg.AbsoluteSize.X,
+					0, 1
+				)
+				snapTo(mn + rel * (mx - mn))
+			end
+
+			trackBg.InputBegan:Connect(function(i)
+				if i.UserInputType == Enum.UserInputType.MouseButton1 then
+					dragging = true
+					onMouse(i)
+					tw(thumb, T_FAST, { Size = UDim2.new(0, 18, 0, 18), Position = UDim2.new((value-mn)/(mx-mn), -9, 0.5, -9) }):Play()
+				end
+			end)
+			UIS.InputChanged:Connect(function(i)
+				if dragging and i.UserInputType == Enum.UserInputType.MouseMovement then onMouse(i) end
+			end)
+			UIS.InputEnded:Connect(function(i)
+				if i.UserInputType == Enum.UserInputType.MouseButton1 and dragging then
+					dragging = false
+					tw(thumb, T_FAST, { Size = UDim2.new(0, 14, 0, 14), Position = UDim2.new((value-mn)/(mx-mn), -7, 0.5, -7) }):Play()
+				end
+			end)
+
+			if o.Flag then Celestial.Flags[o.Flag] = value end
+			return { Set = snapTo }
+		end
+
+		--------------------------------------------------------------------
+		-- Input  (Fluent-style text box)
+		--------------------------------------------------------------------
+		function Tab:CreateInput(o: {
+			Name:        string,
+			Placeholder: string?,
+			Numeric:     boolean?,
+			Flag:        string?,
+			Callback:    (string) -> (),
+		})
+			local row = glassRow(48)
+
+			make("TextLabel", {
+				Position              = UDim2.new(0, 14, 0, 0),
+				Size                  = UDim2.new(0, 110, 1, 0),
+				BackgroundTransparency= 1,
+				Text                  = o.Name,
+				TextColor3            = theme.TextPrimary,
+				Font                  = Enum.Font.Gotham,
+				TextSize              = 13,
+				TextXAlignment        = Enum.TextXAlignment.Left,
+			}, row)
+
+			-- Input field
+			local field = make("Frame", {
+				Position              = UDim2.new(0, 128, 0.5, -14),
+				Size                  = UDim2.new(1, -140, 0, 28),
+				BackgroundColor3      = theme.SurfaceDeep,
+				BackgroundTransparency= theme.SurfaceDeepTrans,
+			}, row)
+			corner(7, field)
+			stroke(theme.StrokeDark, 1, theme.StrokeDarkTrans, field)
+
+			local box = make("TextBox", {
+				Size                  = UDim2.new(1, -16, 1, 0),
+				Position              = UDim2.new(0, 8, 0, 0),
+				BackgroundTransparency= 1,
+				Text                  = "",
+				PlaceholderText       = o.Placeholder or "",
+				PlaceholderColor3     = theme.TextMuted,
+				TextColor3            = theme.TextPrimary,
+				Font                  = Enum.Font.Gotham,
+				TextSize              = 12,
+				ClearTextOnFocus      = false,
+			}, field) :: TextBox
+
+			-- Focus highlight
+			box.Focused:Connect(function()
+				tw(field:FindFirstChildWhichIsA("UIStroke"), T_FAST, {
+					Color = theme.Accent, Transparency = 0.3
+				}):Play()
+			end)
+			box.FocusLost:Connect(function(enter)
+				tw(field:FindFirstChildWhichIsA("UIStroke"), T_FAST, {
+					Color = theme.StrokeDark, Transparency = theme.StrokeDarkTrans
+				}):Play()
+				if enter or not o.Numeric then
+					local val = box.Text
+					if o.Numeric then val = tostring(tonumber(val) or 0) end
+					safecall(o.Callback, val)
+					if o.Flag then Celestial.Flags[o.Flag] = val end
+				end
+			end)
+		end
+
+		--------------------------------------------------------------------
+		-- Dropdown  (Fluent-style with animated expand)
+		--------------------------------------------------------------------
+		function Tab:CreateDropdown(o: {
+			Name:     string,
+			Options:  { string },
+			Default:  string?,
+			Multi:    boolean?,
+			Flag:     string?,
+			Callback: (string | { string }) -> (),
+		}): { Set: (string) -> (), Refresh: ({ string }) -> () }
+			local selected = o.Default or (o.Options[1] or "")
+			local open     = false
+			local multi    = o.Multi or false
+			local multiSel: { [string]: boolean } = {}
+
+			local container = make("Frame", {
+				Name                  = "Dropdown",
+				Size                  = UDim2.new(1, 0, 0, 48),
+				BackgroundColor3      = theme.Surface,
+				BackgroundTransparency= theme.SurfaceDeepTrans,
+				ClipsDescendants      = false,
+				ZIndex                = 10,
+			}, frame)
+			corner(10, container)
+			stroke(theme.StrokeLight, 1, theme.StrokeLightTrans, container)
+
+			make("TextLabel", {
+				Position              = UDim2.new(0, 14, 0, 0),
+				Size                  = UDim2.new(0, 110, 1, 0),
+				BackgroundTransparency= 1,
+				Text                  = o.Name,
+				TextColor3            = theme.TextPrimary,
+				Font                  = Enum.Font.Gotham,
+				TextSize              = 13,
+				TextXAlignment        = Enum.TextXAlignment.Left,
+				ZIndex                = 11,
+			}, container)
+
+			local selBtn = make("TextButton", {
+				Position              = UDim2.new(0, 128, 0.5, -14),
+				Size                  = UDim2.new(1, -140, 0, 28),
+				BackgroundColor3      = theme.SurfaceDeep,
+				BackgroundTransparency= theme.SurfaceDeepTrans,
+				Text                  = selected,
+				TextColor3            = theme.TextSecondary,
+				Font                  = Enum.Font.Gotham,
+				TextSize              = 12,
+				AutoButtonColor       = false,
+				ZIndex                = 11,
+			}, container) :: TextButton
+			corner(7, selBtn)
+			stroke(theme.StrokeDark, 1, theme.StrokeDarkTrans, selBtn)
+			pad(10, 24, 0, 0, selBtn)
+
+			-- Chevron icon
+			local chev = make("TextLabel", {
+				Position              = UDim2.new(1, -20, 0.5, -7),
+				Size                  = UDim2.new(0, 14, 0, 14),
+				BackgroundTransparency= 1,
+				Text                  = "▾",
+				TextColor3            = theme.TextMuted,
+				Font                  = Enum.Font.GothamBold,
+				TextSize              = 11,
+				ZIndex                = 12,
+			}, selBtn)
+
+			-- Dropdown panel (glass)
+			local panel = make("Frame", {
+				Position              = UDim2.new(0, 128, 1, 6),
+				Size                  = UDim2.new(1, -140, 0, 0),
+				BackgroundColor3      = theme.Surface,
+				BackgroundTransparency= 0.04,
+				ClipsDescendants      = true,
+				Visible               = false,
+				ZIndex                = 30,
+			}, container)
+			corner(8, panel)
+			stroke(theme.StrokeLight, 1, 0.6, panel)
+			listLayout(Enum.FillDirection.Vertical, Enum.SortOrder.LayoutOrder, 2, panel)
+			pad(4, 4, 4, 4, panel)
+
+			local function buildItems(opts_: { string })
+				for _, c in panel:GetChildren() do
+					if c:IsA("TextButton") then c:Destroy() end
+				end
+				for _, opt in opts_ do
+					local isActive = multi and multiSel[opt] or (not multi and opt == selected)
+					local item = make("TextButton", {
+						Size                  = UDim2.new(1, 0, 0, 30),
+						BackgroundColor3      = if isActive then theme.Accent else theme.Surface,
+						BackgroundTransparency= if isActive then 0.15 else 0.95,
+						Text                  = opt,
+						TextColor3            = if isActive then theme.Accent else theme.TextSecondary,
+						Font                  = if isActive then Enum.Font.GothamBold else Enum.Font.Gotham,
+						TextSize              = 12,
+						AutoButtonColor       = false,
+						TextXAlignment        = Enum.TextXAlignment.Left,
+						ZIndex                = 31,
+					}, panel)
+					corner(6, item)
+					pad(10, 0, 0, 0, item)
+
+					item.MouseEnter:Connect(function()
+						if not isActive then
+							tw(item, T_FAST, { BackgroundTransparency = 0.80 }):Play()
+						end
+					end)
+					item.MouseLeave:Connect(function()
+						if not isActive then
+							tw(item, T_FAST, { BackgroundTransparency = 0.95 }):Play()
+						end
+					end)
+
+					item.MouseButton1Click:Connect(function()
+						if multi then
+							multiSel[opt] = not multiSel[opt]
+							local chosen = {}
+							for k, v in multiSel do if v then table.insert(chosen, k) end end
+							selected = table.concat(chosen, ", ")
+							selBtn.Text = #chosen > 0 and selected or (o.Options[1] or "")
+							safecall(o.Callback, chosen)
+							if o.Flag then Celestial.Flags[o.Flag] = chosen end
+						else
+							selected = opt
+							selBtn.Text = opt
+							safecall(o.Callback, opt)
+							if o.Flag then Celestial.Flags[o.Flag] = opt end
+							-- close
+							open = false
+							tw(chev, T_FAST, { Rotation = 0 }):Play()
+							tw(panel, T_FAST, { Size = UDim2.new(1, -140, 0, 0) }):Play()
+							task.delay(0.18, function() panel.Visible = false end)
+						end
+						buildItems(opts_)
+					end)
+				end
+				local totalH = #opts_ * 34 + 8
+				panel.Size = UDim2.new(1, -140, 0, totalH)
+			end
+
+			selBtn.MouseButton1Click:Connect(function()
+				open = not open
+				if open then
+					buildItems(o.Options)
+					panel.Visible = true
+					panel.Size = UDim2.new(1, -140, 0, 0)
+					tw(panel, T_MED, { Size = UDim2.new(1, -140, 0, #o.Options * 34 + 8) }):Play()
+					tw(chev,  T_MED, { Rotation = 180 }):Play()
+				else
+					tw(panel, T_MED, { Size = UDim2.new(1, -140, 0, 0) }):Play()
+					tw(chev,  T_MED, { Rotation = 0 }):Play()
+					task.delay(0.22, function() panel.Visible = false end)
+				end
+			end)
+
+			if o.Flag then Celestial.Flags[o.Flag] = selected end
+			return {
+				Set = function(val)
+					selected = val
+					selBtn.Text = val
+					safecall(o.Callback, val)
+					if o.Flag then Celestial.Flags[o.Flag] = val end
+				end,
+				Refresh = function(newOpts)
+					o.Options = newOpts
+					if open then buildItems(newOpts) end
+				end,
+			}
+		end
+
+		--------------------------------------------------------------------
+		-- ColorPicker  (bonus, Fluent feel)
+		--------------------------------------------------------------------
+		function Tab:CreateColorPicker(o: {
+			Name:     string,
+			Default:  Color3?,
+			Flag:     string?,
+			Callback: (Color3) -> (),
+		}): { Set: (Color3) -> () }
+			local color = o.Default or Color3.fromRGB(255, 255, 255)
+			local row   = glassRow(48)
+
+			make("TextLabel", {
+				Position              = UDim2.new(0, 14, 0, 0),
+				Size                  = UDim2.new(1, -90, 1, 0),
+				BackgroundTransparency= 1,
+				Text                  = o.Name,
+				TextColor3            = theme.TextPrimary,
+				Font                  = Enum.Font.Gotham,
+				TextSize              = 13,
+				TextXAlignment        = Enum.TextXAlignment.Left,
+			}, row)
+
+			local preview = make("TextButton", {
+				Size                  = UDim2.new(0, 36, 0, 24),
+				Position              = UDim2.new(1, -48, 0.5, -12),
+				BackgroundColor3      = color,
+				Text                  = "",
+				AutoButtonColor       = false,
+				ZIndex                = 5,
+			}, row)
+			corner(6, preview)
+			stroke(theme.StrokeLight, 1, theme.StrokeLightTrans, preview)
+
+			-- Simple HSV picker popup
+			local pickerOpen = false
+			local picker     = nil
+
+			preview.MouseButton1Click:Connect(function()
+				pickerOpen = not pickerOpen
+				if picker then picker:Destroy() picker = nil end
+				if not pickerOpen then return end
+
+				picker = make("Frame", {
+					Size                  = UDim2.new(0, 200, 0, 140),
+					Position              = UDim2.new(1, -212, 1, 6),
+					BackgroundColor3      = theme.Surface,
+					BackgroundTransparency= 0.04,
+					ZIndex                = 50,
+					ClipsDescendants      = false,
+				}, row)
+				corner(10, picker)
+				stroke(theme.StrokeLight, 1, 0.6, picker)
+
+				local h, s, v = Color3.toHSV(color)
+
+				local function applyHSV()
+					color = Color3.fromHSV(h, s, v)
+					preview.BackgroundColor3 = color
+					safecall(o.Callback, color)
+					if o.Flag then Celestial.Flags[o.Flag] = color end
+				end
+
+				-- Hue slider
+				make("TextLabel", {
+					Position = UDim2.new(0, 10, 0, 10), Size = UDim2.new(1, -20, 0, 14),
+					BackgroundTransparency = 1, Text = "Hue",
+					TextColor3 = theme.TextSecondary, Font = Enum.Font.Gotham, TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 51,
+				}, picker)
+
+				local hueTrack = make("Frame", {
+					Position = UDim2.new(0, 10, 0, 26), Size = UDim2.new(1, -20, 0, 10),
+					BackgroundColor3 = Color3.fromRGB(200, 200, 200), ZIndex = 51,
+				}, picker)
+				corner(5, hueTrack)
+
+				-- Rainbow gradient via UIGradient
+				make("UIGradient", {
+					Color = ColorSequence.new({
+						ColorSequenceKeypoint.new(0,   Color3.fromRGB(255, 0,   0)),
+						ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
+						ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0,   255, 0)),
+						ColorSequenceKeypoint.new(0.50, Color3.fromRGB(0,   255, 255)),
+						ColorSequenceKeypoint.new(0.67, Color3.fromRGB(0,   0,   255)),
+						ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0,   255)),
+						ColorSequenceKeypoint.new(1,    Color3.fromRGB(255, 0,   0)),
+					}),
+				}, hueTrack)
+
+				local hueThumb = make("Frame", {
+					Size = UDim2.new(0, 10, 0, 10),
+					Position = UDim2.new(h, -5, 0.5, -5),
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255),
+					ZIndex = 52,
+				}, hueTrack)
+				corner(5, hueThumb)
+
+				local draggingHue = false
+				hueTrack.InputBegan:Connect(function(i)
+					if i.UserInputType == Enum.UserInputType.MouseButton1 then
+						draggingHue = true
+						h = math.clamp((i.Position.X - hueTrack.AbsolutePosition.X)/hueTrack.AbsoluteSize.X, 0, 1)
+						hueThumb.Position = UDim2.new(h, -5, 0.5, -5)
+						applyHSV()
+					end
+				end)
+				UIS.InputChanged:Connect(function(i)
+					if draggingHue and i.UserInputType == Enum.UserInputType.MouseMovement then
+						h = math.clamp((i.Position.X - hueTrack.AbsolutePosition.X)/hueTrack.AbsoluteSize.X, 0, 1)
+						hueThumb.Position = UDim2.new(h, -5, 0.5, -5)
+						applyHSV()
+					end
+				end)
+				UIS.InputEnded:Connect(function(i)
+					if i.UserInputType == Enum.UserInputType.MouseButton1 then draggingHue = false end
+				end)
+
+				-- Saturation
+				make("TextLabel", {
+					Position = UDim2.new(0, 10, 0, 46), Size = UDim2.new(1, -20, 0, 14),
+					BackgroundTransparency = 1, Text = "Saturation",
+					TextColor3 = theme.TextSecondary, Font = Enum.Font.Gotham, TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 51,
+				}, picker)
+				local satTrack = make("Frame", {
+					Position = UDim2.new(0, 10, 0, 62), Size = UDim2.new(1, -20, 0, 10),
+					BackgroundColor3 = Color3.fromRGB(200, 200, 200), ZIndex = 51,
+				}, picker)
+				corner(5, satTrack)
+				make("UIGradient", {
+					Color = ColorSequence.new(Color3.fromRGB(255,255,255), Color3.fromHSV(h,1,1)),
+				}, satTrack)
+				local satThumb = make("Frame", {
+					Size = UDim2.new(0, 10, 0, 10),
+					Position = UDim2.new(s, -5, 0.5, -5),
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255), ZIndex = 52,
+				}, satTrack)
+				corner(5, satThumb)
+
+				local draggingSat = false
+				satTrack.InputBegan:Connect(function(i)
+					if i.UserInputType == Enum.UserInputType.MouseButton1 then
+						draggingSat = true
+						s = math.clamp((i.Position.X - satTrack.AbsolutePosition.X)/satTrack.AbsoluteSize.X, 0, 1)
+						satThumb.Position = UDim2.new(s, -5, 0.5, -5)
+						applyHSV()
+					end
+				end)
+				UIS.InputChanged:Connect(function(i)
+					if draggingSat and i.UserInputType == Enum.UserInputType.MouseMovement then
+						s = math.clamp((i.Position.X - satTrack.AbsolutePosition.X)/satTrack.AbsoluteSize.X, 0, 1)
+						satThumb.Position = UDim2.new(s, -5, 0.5, -5)
+						applyHSV()
+					end
+				end)
+				UIS.InputEnded:Connect(function(i)
+					if i.UserInputType == Enum.UserInputType.MouseButton1 then draggingSat = false end
+				end)
+
+				-- Value/Brightness
+				make("TextLabel", {
+					Position = UDim2.new(0, 10, 0, 82), Size = UDim2.new(1, -20, 0, 14),
+					BackgroundTransparency = 1, Text = "Brightness",
+					TextColor3 = theme.TextSecondary, Font = Enum.Font.Gotham, TextSize = 11,
+					TextXAlignment = Enum.TextXAlignment.Left, ZIndex = 51,
+				}, picker)
+				local valTrack = make("Frame", {
+					Position = UDim2.new(0, 10, 0, 98), Size = UDim2.new(1, -20, 0, 10),
+					BackgroundColor3 = Color3.fromRGB(200, 200, 200), ZIndex = 51,
+				}, picker)
+				corner(5, valTrack)
+				make("UIGradient", {
+					Color = ColorSequence.new(Color3.fromRGB(0,0,0), Color3.fromRGB(255,255,255)),
+				}, valTrack)
+				local valThumb = make("Frame", {
+					Size = UDim2.new(0, 10, 0, 10),
+					Position = UDim2.new(v, -5, 0.5, -5),
+					BackgroundColor3 = Color3.fromRGB(255, 255, 255), ZIndex = 52,
+				}, valTrack)
+				corner(5, valThumb)
+
+				local draggingVal = false
+				valTrack.InputBegan:Connect(function(i)
+					if i.UserInputType == Enum.UserInputType.MouseButton1 then
+						draggingVal = true
+						v = math.clamp((i.Position.X - valTrack.AbsolutePosition.X)/valTrack.AbsoluteSize.X, 0, 1)
+						valThumb.Position = UDim2.new(v, -5, 0.5, -5)
+						applyHSV()
+					end
+				end)
+				UIS.InputChanged:Connect(function(i)
+					if draggingVal and i.UserInputType == Enum.UserInputType.MouseMovement then
+						v = math.clamp((i.Position.X - valTrack.AbsolutePosition.X)/valTrack.AbsoluteSize.X, 0, 1)
+						valThumb.Position = UDim2.new(v, -5, 0.5, -5)
+						applyHSV()
+					end
+				end)
+				UIS.InputEnded:Connect(function(i)
+					if i.UserInputType == Enum.UserInputType.MouseButton1 then draggingVal = false end
+				end)
+			end)
+
+			if o.Flag then Celestial.Flags[o.Flag] = color end
+			return {
+				Set = function(c)
+					color = c
+					preview.BackgroundColor3 = c
+					safecall(o.Callback, c)
+					if o.Flag then Celestial.Flags[o.Flag] = c end
+				end,
+			}
+		end
+
+		--------------------------------------------------------------------
+		-- Keybind picker
+		--------------------------------------------------------------------
+		function Tab:CreateKeybind(o: {
+			Name:     string,
+			Default:  Enum.KeyCode?,
+			Flag:     string?,
+			Callback: (Enum.KeyCode) -> (),
+		}): { Set: (Enum.KeyCode) -> () }
+			local key      = o.Default or Enum.KeyCode.Unknown
+			local binding  = false
+			local row      = glassRow(48)
+
+			make("TextLabel", {
+				Position = UDim2.new(0, 14, 0, 0), Size = UDim2.new(1, -110, 1, 0),
+				BackgroundTransparency = 1, Text = o.Name,
+				TextColor3 = theme.TextPrimary, Font = Enum.Font.Gotham, TextSize = 13,
+				TextXAlignment = Enum.TextXAlignment.Left,
+			}, row)
+
+			local keyBtn = make("TextButton", {
+				Size = UDim2.new(0, 80, 0, 26),
+				Position = UDim2.new(1, -90, 0.5, -13),
+				BackgroundColor3 = theme.SurfaceDeep,
+				BackgroundTransparency = theme.SurfaceDeepTrans,
+				Text = key.Name,
+				TextColor3 = theme.Accent,
+				Font = Enum.Font.GothamBold,
+				TextSize = 11,
+				AutoButtonColor = false,
+				ZIndex = 5,
+			}, row) :: TextButton
+			corner(7, keyBtn)
+			stroke(theme.Accent, 1, 0.5, keyBtn)
+
+			keyBtn.MouseButton1Click:Connect(function()
+				binding = true
+				keyBtn.Text = "..."
+				tw(keyBtn, T_FAST, { BackgroundTransparency = 0.5 }):Play()
+			end)
+
+			UIS.InputBegan:Connect(function(i, gpe)
+				if binding and not gpe and i.UserInputType == Enum.UserInputType.Keyboard then
+					binding = false
+					key = i.KeyCode
+					keyBtn.Text = key.Name
+					tw(keyBtn, T_FAST, { BackgroundTransparency = theme.SurfaceDeepTrans }):Play()
+					safecall(o.Callback, key)
+					if o.Flag then Celestial.Flags[o.Flag] = key end
+				end
+			end)
+
+			if o.Flag then Celestial.Flags[o.Flag] = key end
+			return {
+				Set = function(k)
+					key = k
+					keyBtn.Text = k.Name
+					safecall(o.Callback, k)
+					if o.Flag then Celestial.Flags[o.Flag] = k end
+				end,
+			}
+		end
+
+		return Tab
+	end -- CreateTab
+
+	table.insert(self.Windows, Window)
+	return Window
+end -- CreateWindow
+
+------------------------------------------------------------------------
+-- SetTheme  (live swap)
+------------------------------------------------------------------------
+function Celestial:SetTheme(name: string)
+	local t = Themes[name]
+	if not t then warn("[Celestial] Unknown theme: " .. tostring(name)) return end
+	self.ActiveTheme = t
 end
 
 ------------------------------------------------------------------------
--- Theme definitions
+-- Destroy all windows
 ------------------------------------------------------------------------
+function Celestial:Destroy()
+	for _, win in self.Windows do
+		if win._screen then
+			safecall(function() win._screen:Destroy() end)
+		end
+	end
+	self.Windows = {}
+end
 
---- All themes follow the same key schema so the UI layer can swap them
---- at runtime without any conditional logic.
-local Themes = {
-
-	-- ── Midnight (default dark) ────────────────────────────────────────
-	Midnight = {
-		TextColor                     = Color3.fromRGB(235, 235, 235),
-
-		Background                    = Color3.fromRGB(18, 18, 22),
-		Topbar                        = Color3.fromRGB(26, 26, 32),
-		Shadow                        = Color3.fromRGB(10, 10, 14),
-
-		NotificationBackground        = Color3.fromRGB(22, 22, 28),
-		NotificationActionsBackground = Color3.fromRGB(225, 225, 235),
-
-		TabBackground                 = Color3.fromRGB(32, 32, 40),
-		TabStroke                     = Color3.fromRGB(44, 44, 54),
-		TabBackgroundSelected         = Color3.fromRGB(100, 100, 255),
-		TabTextColor                  = Color3.fromRGB(180, 180, 200),
-		SelectedTabTextColor          = Color3.fromRGB(255, 255, 255),
-
-		ElementBackground             = Color3.fromRGB(28, 28, 35),
-		ElementBackgroundHover        = Color3.fromRGB(36, 36, 46),
-		SecondaryElementBackground    = Color3.fromRGB(22, 22, 28),
-		ElementStroke                 = Color3.fromRGB(50, 50, 65),
-		SecondaryElementStroke        = Color3.fromRGB(40, 40, 52),
-
-		SliderBackground              = Color3.fromRGB(60, 60, 200),
-		SliderProgress                = Color3.fromRGB(100, 100, 255),
-		SliderStroke                  = Color3.fromRGB(120, 120, 255),
-
-		ToggleBackground              = Color3.fromRGB(28, 28, 38),
-		ToggleEnabled                 = Color3.fromRGB(80, 80, 240),
-		ToggleDisabled                = Color3.fromRGB(70, 70, 90),
-		ToggleEnabledStroke           = Color3.fromRGB(100, 100, 255),
-		ToggleDisabledStroke          = Color3.fromRGB(90, 90, 110),
-		ToggleEnabledOuterStroke      = Color3.fromRGB(60, 60, 160),
-		ToggleDisabledOuterStroke     = Color3.fromRGB(50, 50, 65),
-
-		DropdownSelected              = Color3.fromRGB(36, 36, 50),
-		DropdownUnselected            = Color3.fromRGB(24, 24, 34),
-
-		InputBackground               = Color3.fromRGB(26, 26, 34),
-		InputStroke                   = Color3.fromRGB(55, 55, 75),
-		PlaceholderColor              = Color3.fromRGB(120, 120, 150),
-	},
-
-	-- ── Arctic (clean light) ──────────────────────────────────────────
-	Arctic = {
-		TextColor                     = Color3.fromRGB(30, 35, 45),
-
-		Background                    = Color3.fromRGB(245, 247, 252),
-		Topbar                        = Color3.fromRGB(230, 234, 244),
-		Shadow                        = Color3.fromRGB(190, 196, 215),
-
-		NotificationBackground        = Color3.fromRGB(252, 253, 255),
-		NotificationActionsBackground = Color3.fromRGB(235, 238, 248),
-
-		TabBackground                 = Color3.fromRGB(220, 226, 240),
-		TabStroke                     = Color3.fromRGB(200, 208, 228),
-		TabBackgroundSelected         = Color3.fromRGB(255, 255, 255),
-		TabTextColor                  = Color3.fromRGB(80, 90, 115),
-		SelectedTabTextColor          = Color3.fromRGB(20, 25, 40),
-
-		ElementBackground             = Color3.fromRGB(238, 241, 250),
-		ElementBackgroundHover        = Color3.fromRGB(225, 230, 245),
-		SecondaryElementBackground    = Color3.fromRGB(235, 238, 248),
-		ElementStroke                 = Color3.fromRGB(200, 208, 228),
-		SecondaryElementStroke        = Color3.fromRGB(210, 216, 232),
-
-		SliderBackground              = Color3.fromRGB(140, 170, 220),
-		SliderProgress                = Color3.fromRGB(80, 130, 210),
-		SliderStroke                  = Color3.fromRGB(100, 150, 220),
-
-		ToggleBackground              = Color3.fromRGB(215, 222, 238),
-		ToggleEnabled                 = Color3.fromRGB(50, 120, 210),
-		ToggleDisabled                = Color3.fromRGB(160, 168, 188),
-		ToggleEnabledStroke           = Color3.fromRGB(70, 140, 230),
-		ToggleDisabledStroke          = Color3.fromRGB(180, 186, 204),
-		ToggleEnabledOuterStroke      = Color3.fromRGB(100, 140, 200),
-		ToggleDisabledOuterStroke     = Color3.fromRGB(185, 192, 210),
-
-		DropdownSelected              = Color3.fromRGB(228, 232, 246),
-		DropdownUnselected            = Color3.fromRGB(218, 224, 240),
-
-		InputBackground               = Color3.fromRGB(238, 241, 250),
-		InputStroke                   = Color3.fromRGB(190, 198, 220),
-		PlaceholderColor              = Color3.fromRGB(140, 148, 170),
-	},
-
-	-- ── Ember (warm dark) ─────────────────────────────────────────────
-	Ember = {
-		TextColor                     = Color3.fromRGB(255, 240, 220),
-
-		Background                    = Color3.fromRGB(22, 14, 10),
-		Topbar                        = Color3.fromRGB(32, 20, 14),
-		Shadow                        = Color3.fromRGB(12, 8, 5),
-
-		NotificationBackground        = Color3.fromRGB(28, 18, 12),
-		NotificationActionsBackground = Color3.fromRGB(245, 225, 205),
-
-		TabBackground                 = Color3.fromRGB(50, 32, 22),
-		TabStroke                     = Color3.fromRGB(68, 44, 30),
-		TabBackgroundSelected         = Color3.fromRGB(230, 140, 60),
-		TabTextColor                  = Color3.fromRGB(220, 190, 160),
-		SelectedTabTextColor          = Color3.fromRGB(30, 15, 5),
-
-		ElementBackground             = Color3.fromRGB(36, 24, 16),
-		ElementBackgroundHover        = Color3.fromRGB(48, 32, 22),
-		SecondaryElementBackground    = Color3.fromRGB(28, 18, 12),
-		ElementStroke                 = Color3.fromRGB(72, 48, 34),
-		SecondaryElementStroke        = Color3.fromRGB(62, 40, 28),
-
-		SliderBackground              = Color3.fromRGB(180, 90, 30),
-		SliderProgress                = Color3.fromRGB(230, 120, 50),
-		SliderStroke                  = Color3.fromRGB(255, 145, 65),
-
-		ToggleBackground              = Color3.fromRGB(36, 24, 16),
-		ToggleEnabled                 = Color3.fromRGB(220, 110, 40),
-		ToggleDisabled                = Color3.fromRGB(90, 60, 45),
-		ToggleEnabledStroke           = Color3.fromRGB(255, 140, 60),
-		ToggleDisabledStroke          = Color3.fromRGB(110, 75, 58),
-		ToggleEnabledOuterStroke      = Color3.fromRGB(180, 90, 40),
-		ToggleDisabledOuterStroke     = Color3.fromRGB(70, 50, 38),
-
-		DropdownSelected              = Color3.fromRGB(50, 34, 24),
-		DropdownUnselected            = Color3.fromRGB(34, 22, 15),
-
-		InputBackground               = Color3.fromRGB(36, 24, 16),
-		InputStroke                   = Color3.fromRGB(80, 52, 36),
-		PlaceholderColor              = Color3.fromRGB(170, 130, 100),
-	},
-
-	-- ── Void (OLED black + violet accent) ────────────────────────────
-	Void = {
-		TextColor                     = Color3.fromRGB(230, 220, 255),
-
-		Background                    = Color3.fromRGB(4, 4, 8),
-		Topbar                        = Color3.fromRGB(10, 8, 16),
-		Shadow                        = Color3.fromRGB(2, 2, 4),
-
-		NotificationBackground        = Color3.fromRGB(8, 6, 14),
-		NotificationActionsBackground = Color3.fromRGB(230, 220, 255),
-
-		TabBackground                 = Color3.fromRGB(22, 16, 36),
-		TabStroke                     = Color3.fromRGB(36, 26, 56),
-		TabBackgroundSelected         = Color3.fromRGB(140, 80, 255),
-		TabTextColor                  = Color3.fromRGB(180, 160, 220),
-		SelectedTabTextColor          = Color3.fromRGB(255, 255, 255),
-
-		ElementBackground             = Color3.fromRGB(14, 10, 24),
-		ElementBackgroundHover        = Color3.fromRGB(22, 16, 36),
-		SecondaryElementBackground    = Color3.fromRGB(10, 8, 18),
-		ElementStroke                 = Color3.fromRGB(44, 30, 70),
-		SecondaryElementStroke        = Color3.fromRGB(36, 24, 58),
-
-		SliderBackground              = Color3.fromRGB(80, 40, 180),
-		SliderProgress                = Color3.fromRGB(120, 70, 240),
-		SliderStroke                  = Color3.fromRGB(150, 90, 255),
-
-		ToggleBackground              = Color3.fromRGB(14, 10, 24),
-		ToggleEnabled                 = Color3.fromRGB(120, 60, 240),
-		ToggleDisabled                = Color3.fromRGB(55, 40, 85),
-		ToggleEnabledStroke           = Color3.fromRGB(150, 90, 255),
-		ToggleDisabledStroke          = Color3.fromRGB(75, 55, 110),
-		ToggleEnabledOuterStroke      = Color3.fromRGB(90, 50, 180),
-		ToggleDisabledOuterStroke     = Color3.fromRGB(40, 28, 65),
-
-		DropdownSelected              = Color3.fromRGB(22, 16, 38),
-		DropdownUnselected            = Color3.fromRGB(12, 8, 22),
-
-		InputBackground               = Color3.fromRGB(14, 10, 24),
-		InputStroke                   = Color3.fromRGB(55, 36, 100),
-		PlaceholderColor              = Color3.fromRGB(130, 100, 180),
-	},
-
-	-- ── Jade (muted teal dark) ────────────────────────────────────────
-	Jade = {
-		TextColor                     = Color3.fromRGB(210, 235, 230),
-
-		Background                    = Color3.fromRGB(10, 22, 20),
-		Topbar                        = Color3.fromRGB(16, 32, 28),
-		Shadow                        = Color3.fromRGB(6, 14, 12),
-
-		NotificationBackground        = Color3.fromRGB(14, 28, 24),
-		NotificationActionsBackground = Color3.fromRGB(210, 235, 230),
-
-		TabBackground                 = Color3.fromRGB(28, 55, 48),
-		TabStroke                     = Color3.fromRGB(38, 70, 62),
-		TabBackgroundSelected         = Color3.fromRGB(60, 180, 150),
-		TabTextColor          
+return Celestial
